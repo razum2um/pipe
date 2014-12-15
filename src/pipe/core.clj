@@ -15,6 +15,8 @@
 
 (defmulti pretty-xml class)
 
+(defmethod pretty-xml nil [_] nil)
+
 (defmethod pretty-xml javax.xml.transform.stream.StreamSource [in]
   (let [out (StreamResult. (StringWriter.))
         tf (TransformerFactory/newInstance)
