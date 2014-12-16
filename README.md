@@ -1,36 +1,16 @@
 # pipe
 
-FIXME: description
-
-## Installation
-
-Download from http://example.com/FIXME.
+Allows you to write "middlewares for data"
 
 ## Usage
 
-FIXME: explanation
+This logs raw input xml, indents it and logs formatted response as well
 
-    $ java -jar pipe-0.1.0-standalone.jar [args]
-
-## Options
-
-FIXME: listing of options this app accepts.
-
-## Examples
-
-...
-
-### Bugs
-
-...
-
-### Any Other Sections
-### That You Think
-### Might be Useful
+    user=> (pipe.core/start "localhost:8000" (pipe.core/prefix-log "Original:") pipe.core/pretty-xml (pipe.core/prefix-log "Processed:"))
 
 ## License
 
-Copyright © 2014 FIXME
+Copyright © 2014 Vlad Bokov
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
