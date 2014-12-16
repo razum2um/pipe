@@ -17,7 +17,9 @@ Now we want:
 
 It can be achieved like this:
 
-    user=> (pipe.core/start "wsf.cdyne.com" [(partial pipe.core/pretty-xml 4) (pipe.core/prefix-log "Formatted:")])
+    user=> (pipe.core/start "wsf.cdyne.com"
+                            [(partial pipe.core/pretty-xml 4)
+                             (pipe.core/prefix-log "Formatted:")])
 
 This launches proxy on `localhost:8080` and calling same action with same payload will log request and response with proper indent and also cache identical queries
 
