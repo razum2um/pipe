@@ -37,20 +37,28 @@
         in (StreamSource. r)]
     (pretty-xml in)))
 
-(defmulti log (comp class last list))
+(defmulti inspect (comp class last list))
 
-(defmethod log org.httpkit.BytesInputStream [wrapper-fn s]
+(defmethod inspect org.httpkit.BytesInputStream [wrapper-fn s]
   (with-open [rdr (io/reader s)]
-    (log wrapper-fn (s/join "\n" (doall (line-seq rdr)))))
+    (inspect wrapper-fn (s/join "\n" (line-seq rdr))))
   (.reset s)
   s)
 
-(defmethod log :default [wrapper-fn s]
+(defmethod inspect :default [wrapper-fn s]
   (wrapper-fn s)
   s)
 
+(defn truncate [s]
+  (if (< 1000 (count s))
+    (apply str (concat (take 1000 s) (take 3 (repeat "."))))
+    s))
+
 (defn prefix-log [prefix]
-  (partial log #(timbre/info prefix %)))
+  (let [logfn (fn [s] )])
+  (partial inspect #(->> % truncate (timbre/info prefix))))
+
+;; #########
 
 (defn upstream-handler [resp-decorator-fn out-ch upstream-resp]
   (let [{:keys [status headers body error opts]} upstream-resp
@@ -62,20 +70,23 @@
                                :transfer-encoding
                                :x-frame-options))
         resp-body (resp-decorator-fn body)
+        ;; _ (timbre/debug "upstream resp status=" status "\nheaders=" headers "\nbody=" body "\n\n")
         resp {:status status
               :headers resp-headers
-              :body resp-body}]
+              :body resp-body
+              }]
     (send! out-ch resp)))
 
 (defn upstream-request [req-decorator-fn resp-decorator-fn channel request-method scheme uri headers body]
   (let [
-        ;; _ (println transformators "\n!")
         upstream-body (req-decorator-fn body)
+        ;; _ (timbre/debug "upstream req meth=" request-method "\nuri=" uri "\nheaders=" headers "\nbody=" body "\n\n")
         upstream-req {:url (str (name scheme) "://" @target-host uri)
                       :method request-method
                       :as :text
                       :headers (assoc headers "host" @target-host)
-                      :body upstream-body}]
+                      :body upstream-body
+                      }]
     (http/request upstream-req
                   (partial upstream-handler resp-decorator-fn channel))))
 
@@ -91,7 +102,7 @@
                           request-method scheme uri headers body)))))
 
 (defn stop []
-  (when-not (nil? @server)
+  (when @server
     (@server :timeout 100)
     (reset! transformators nil)
     (reset! target-host nil)
@@ -103,10 +114,14 @@
 
 (defn start [host & fn-pairs]
   (let [req-resp-fn-pairs (map ensure-pair (conj fn-pairs identity))
-        req-fns-resp-fns (partition 2 (apply interleave req-resp-fn-pairs))
+        ;; _ (timbre/debug "req-resp-fn-pairs=" req-resp-fn-pairs "\n")
+        req-fns-resp-fns (apply map vector req-resp-fn-pairs)
+        ;; _ (timbre/debug "req-fns-resp-fns=" req-fns-resp-fns "\n")
         req-resp-fns (->> req-fns-resp-fns
-                          (map #(apply comp %))
-                          vec)]
+                          (map #(->> % reverse (apply comp)))
+                          vec)
+        ;; _ (timbre/debug "req-resp-fns=" req-resp-fns "\n")
+        ]
     (reset! transformators req-resp-fns)
     (reset! target-host host)
     (reset! server (run-server #'handler {:port 8080}))))
