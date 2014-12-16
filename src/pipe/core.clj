@@ -15,27 +15,27 @@
 (defonce target-host (atom nil))
 (defonce transformators (atom nil))
 
-(defmulti pretty-xml class)
+(defmulti pretty-xml (comp class last list))
 
 (defmethod pretty-xml nil [_] nil)
 
-(defmethod pretty-xml javax.xml.transform.stream.StreamSource [in]
+(defmethod pretty-xml javax.xml.transform.stream.StreamSource [indent in]
   (let [out (StreamResult. (StringWriter.))
         tf (TransformerFactory/newInstance)
         t (doto (.newTransformer tf)
             (.setOutputProperty "indent" "yes")
-            (.setOutputProperty "{http://xml.apache.org/xslt}indent-amount" "2")
+            (.setOutputProperty "{http://xml.apache.org/xslt}indent-amount" (str indent))
             (.transform in out))]
     (-> out .getWriter .toString)))
 
-(defmethod pretty-xml org.httpkit.BytesInputStream [s]
+(defmethod pretty-xml org.httpkit.BytesInputStream [indent s]
   (let [in (StreamSource. s)]
-    (pretty-xml in)))
+    (pretty-xml indent in)))
 
-(defmethod pretty-xml java.lang.String [s]
+(defmethod pretty-xml java.lang.String [indent s]
   (let [r (StringReader. s)
         in (StreamSource. r)]
-    (pretty-xml in)))
+    (pretty-xml indent in)))
 
 (defmulti inspect (comp class last list))
 
@@ -112,16 +112,18 @@
 (defmethod ensure-pair true [xs] (take 2 (cycle xs)))
 (defmethod ensure-pair false [x] [x x])
 
-(defn start [host & fn-pairs]
+(defn response-chain [& xs]
+  (map vector (repeat identity) xs))
+
+(defn request-chain [& xs]
+  (map vector xs (repeat identity)))
+
+(defn start [host fn-pairs]
   (let [req-resp-fn-pairs (map ensure-pair (conj fn-pairs identity))
-        ;; _ (timbre/debug "req-resp-fn-pairs=" req-resp-fn-pairs "\n")
         req-fns-resp-fns (apply map vector req-resp-fn-pairs)
-        ;; _ (timbre/debug "req-fns-resp-fns=" req-fns-resp-fns "\n")
         req-resp-fns (->> req-fns-resp-fns
                           (map #(->> % reverse (apply comp)))
-                          vec)
-        ;; _ (timbre/debug "req-resp-fns=" req-resp-fns "\n")
-        ]
+                          vec)]
     (reset! transformators req-resp-fns)
     (reset! target-host host)
     (reset! server (run-server #'handler {:port 8080}))))
