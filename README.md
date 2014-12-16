@@ -32,6 +32,7 @@ This launches proxy on `localhost:8080` and calling same action with same payloa
         </soapenv:Body>
     </soapenv:Envelope>
 
+    2014-Dec-17 05:18:05 +0700 macpro.local DEBUG [pipe.core] - Cached: http://wsf.cdyne.com/WeatherWS/Weather.asmx
     2014-Dec-17 04:44:03 +0700 macpro.local INFO [pipe.core] - Formatted: <?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
         <soap:Body>
             <GetCityWeatherByZIPResponse xmlns="http://ws.cdyne.com/WeatherWS/">
@@ -78,7 +79,7 @@ Same for middlewares for only requests: `[request-fn identity]` or `(pipe.core/r
 
 Middlewares are appried left-to-right as they follow in the list.
 
-A middleware can be a function alone - in thos case it gets applied to both request and response
+A middleware can be a function alone - in this case it gets applied to both request and response
 
 ## License
 

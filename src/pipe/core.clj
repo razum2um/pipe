@@ -11,9 +11,10 @@
            [java.io StringReader StringWriter])
   (:gen-class))
 
-(defonce server (atom nil))
-(defonce target-host (atom nil))
-(defonce transformators (atom nil))
+(defonce server (atom ""))
+(defonce target-host (atom ""))
+(defonce transformators (atom []))
+(defonce cache (atom {}))
 
 (defmulti pretty-xml (comp class last list))
 
@@ -69,26 +70,29 @@
                                :content-security-policy
                                :transfer-encoding
                                :x-frame-options))
-        resp-body (resp-decorator-fn body)
-        ;; _ (timbre/debug "upstream resp status=" status "\nheaders=" headers "\nbody=" body "\n\n")
         resp {:status status
               :headers resp-headers
-              :body resp-body
-              }]
-    (send! out-ch resp)))
+              :body body}
+        decorated-resp (update-in resp [:body] resp-decorator-fn)]
+    (swap! cache assoc opts resp)
+    (send! out-ch decorated-resp)))
 
-(defn upstream-request [req-decorator-fn resp-decorator-fn channel request-method scheme uri headers body]
+(defn upstream-request [req-decorator-fn resp-decorator-fn out-ch request-method scheme uri headers body]
   (let [
         upstream-body (req-decorator-fn body)
-        ;; _ (timbre/debug "upstream req meth=" request-method "\nuri=" uri "\nheaders=" headers "\nbody=" body "\n\n")
-        upstream-req {:url (str (name scheme) "://" @target-host uri)
+        url (str (name scheme) "://" @target-host uri)
+        upstream-req {:url url
                       :method request-method
                       :as :text
                       :headers (assoc headers "host" @target-host)
-                      :body upstream-body
-                      }]
-    (http/request upstream-req
-                  (partial upstream-handler resp-decorator-fn channel))))
+                      :body upstream-body}
+        cached-resp (get @cache upstream-req)
+        ]
+    (if cached-resp
+      (do (timbre/debug "Cached:" url)
+          (send! out-ch (update-in cached-resp [:body] resp-decorator-fn)))
+      (http/request upstream-req
+                    (partial upstream-handler resp-decorator-fn out-ch)))))
 
 (defn single-arity? [v]
   (some #(= 1 (count %))
@@ -104,6 +108,7 @@
 (defn stop []
   (when @server
     (@server :timeout 100)
+    (reset! cache {})
     (reset! transformators nil)
     (reset! target-host nil)
     (reset! server nil)))
@@ -124,6 +129,7 @@
         req-resp-fns (->> req-fns-resp-fns
                           (map #(->> % reverse (apply comp)))
                           vec)]
+    (reset! cache {})
     (reset! transformators req-resp-fns)
     (reset! target-host host)
     (reset! server (run-server #'handler {:port 8080}))))
