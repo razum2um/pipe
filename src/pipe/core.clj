@@ -4,7 +4,8 @@
             [clojure.string :as s :refer [trim]]
             [clojure.walk :as walk]
             [org.httpkit.server :refer :all]
-            [taoensso.timbre :as log])
+            [clojure.java.io :as io]
+            [taoensso.timbre :as timbre])
   (:import [javax.xml.transform Transformer TransformerFactory]
            [javax.xml.transform.stream StreamSource StreamResult]
            [java.io StringReader StringWriter])
@@ -12,6 +13,7 @@
 
 (defonce server (atom nil))
 (defonce target-host (atom nil))
+(defonce transformators (atom nil))
 
 (defmulti pretty-xml class)
 
@@ -35,8 +37,22 @@
         in (StreamSource. r)]
     (pretty-xml in)))
 
+(defmulti log (comp class last list))
 
-(defn upstream-handler [out-ch upstream-resp]
+(defmethod log org.httpkit.BytesInputStream [wrapper-fn s]
+  (with-open [rdr (io/reader s)]
+    (log wrapper-fn (s/join "\n" (doall (line-seq rdr)))))
+  (.reset s)
+  s)
+
+(defmethod log :default [wrapper-fn s]
+  (wrapper-fn s)
+  s)
+
+(defn prefix-log [prefix]
+  (partial log #(timbre/info prefix %)))
+
+(defn upstream-handler [resp-decorator-fn out-ch upstream-resp]
   (let [{:keys [status headers body error opts]} upstream-resp
         resp-headers (walk/stringify-keys
                        (dissoc headers
@@ -45,41 +61,55 @@
                                :content-security-policy
                                :transfer-encoding
                                :x-frame-options))
-        _ (log/debug "Upstream headers:\n" (-> headers pprint with-out-str trim))
-        resp-body (pretty-xml body)
-        _ (log/info "Out:\n" (trim resp-body))
+        resp-body (resp-decorator-fn body)
         resp {:status status
               :headers resp-headers
               :body resp-body}]
     (send! out-ch resp)))
 
-(defn async-proxy [channel request-method scheme uri headers body]
-  (let [upstream-body (pretty-xml body)
-        _ (log/info "In:\n" (trim upstream-body))
+(defn upstream-request [req-decorator-fn resp-decorator-fn channel request-method scheme uri headers body]
+  (let [
+        ;; _ (println transformators "\n!")
+        upstream-body (req-decorator-fn body)
         upstream-req {:url (str (name scheme) "://" @target-host uri)
                       :method request-method
                       :as :text
                       :headers (assoc headers "host" @target-host)
                       :body upstream-body}]
     (http/request upstream-req
-                  (partial upstream-handler channel))))
+                  (partial upstream-handler resp-decorator-fn channel))))
+
+(defn single-arity? [v]
+  (some #(= 1 (count %))
+        (-> v meta :arglists)))
 
 (defn handler [req]
-  (with-channel req channel
-    (let [{:keys [request-method scheme uri headers body]} req]
-      (async-proxy channel request-method scheme uri headers body))))
+  (let [[req-decorator-var resp-decorator-var] @transformators]
+    (with-channel req channel
+      (let [{:keys [request-method scheme uri headers body]} req]
+        (upstream-request req-decorator-var resp-decorator-var channel
+                          request-method scheme uri headers body)))))
 
 (defn stop []
   (when-not (nil? @server)
     (@server :timeout 100)
+    (reset! transformators nil)
     (reset! target-host nil)
     (reset! server nil)))
 
-(defn start
-  ([host] (start host 8080))
-  ([host port]
-   (reset! target-host host)
-   (reset! server (run-server #'handler {:port port}))))
+(defmulti ensure-pair coll?)
+(defmethod ensure-pair true [xs] (take 2 (cycle xs)))
+(defmethod ensure-pair false [x] [x x])
+
+(defn start [host & fn-pairs]
+  (let [req-resp-fn-pairs (map ensure-pair (conj fn-pairs identity))
+        req-fns-resp-fns (partition 2 (apply interleave req-resp-fn-pairs))
+        req-resp-fns (->> req-fns-resp-fns
+                          (map #(apply comp %))
+                          vec)]
+    (reset! transformators req-resp-fns)
+    (reset! target-host host)
+    (reset! server (run-server #'handler {:port 8080}))))
 
 (defn -main
   [& args]
