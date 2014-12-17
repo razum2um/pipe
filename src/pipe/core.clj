@@ -11,14 +11,14 @@
            [java.io StringReader StringWriter])
   (:gen-class))
 
-(defonce server (atom ""))
+(defonce server (atom nil))
 (defonce target-host (atom ""))
 (defonce transformators (atom []))
 (defonce cache (atom {}))
 
 (defmulti pretty-xml (comp class last list))
 
-(defmethod pretty-xml nil [_] nil)
+(defmethod pretty-xml nil [& _] nil)
 
 (defmethod pretty-xml javax.xml.transform.stream.StreamSource [indent in]
   (let [out (StreamResult. (StringWriter.))
@@ -38,6 +38,12 @@
         in (StreamSource. r)]
     (pretty-xml indent in)))
 
+(defmethod pretty-xml clojure.lang.PersistentArrayMap [indent m]
+  (let [content-type (-> m :headers (get "content-type") str)]
+    (if (re-find #"xml" content-type)
+      (update-in m [:body] (partial pretty-xml indent))
+      m)))
+
 (defmulti inspect (comp class last list))
 
 (defmethod inspect org.httpkit.BytesInputStream [wrapper-fn s]
@@ -45,6 +51,10 @@
     (inspect wrapper-fn (s/join "\n" (line-seq rdr))))
   (.reset s)
   s)
+
+(defmethod inspect clojure.lang.PersistentArrayMap [wrapper-fn m]
+  (inspect wrapper-fn (:body m))
+  m)
 
 (defmethod inspect :default [wrapper-fn s]
   (wrapper-fn s)
@@ -73,14 +83,16 @@
         resp {:status status
               :headers resp-headers
               :body body}
-        decorated-resp (update-in resp [:body] resp-decorator-fn)]
+        ;; _ (println "!! resp-headers=" resp-headers)
+        decorated-resp (resp-decorator-fn resp)]
     (swap! cache assoc opts resp)
     (send! out-ch decorated-resp)))
 
-(defn upstream-request [req-decorator-fn resp-decorator-fn out-ch request-method scheme uri headers body]
+(defn upstream-request [req-decorator-fn resp-decorator-fn out-ch request-method scheme uri query-string headers body]
   (let [
         upstream-body (req-decorator-fn body)
-        url (str (name scheme) "://" @target-host uri)
+        path (str (name scheme) "://" @target-host uri)
+        url (if query-string (str path "?" query-string) path)
         upstream-req {:url url
                       :method request-method
                       :as :text
@@ -90,7 +102,7 @@
         ]
     (if cached-resp
       (do (timbre/debug "Cached:" url)
-          (send! out-ch (update-in cached-resp [:body] resp-decorator-fn)))
+          (send! out-ch (resp-decorator-fn cached-resp)))
       (http/request upstream-req
                     (partial upstream-handler resp-decorator-fn out-ch)))))
 
@@ -101,9 +113,9 @@
 (defn handler [req]
   (let [[req-decorator-var resp-decorator-var] @transformators]
     (with-channel req channel
-      (let [{:keys [request-method scheme uri headers body]} req]
+      (let [{:keys [request-method scheme uri query-string headers body]} req]
         (upstream-request req-decorator-var resp-decorator-var channel
-                          request-method scheme uri headers body)))))
+                          request-method scheme uri query-string headers body)))))
 
 (defn stop []
   (when @server
